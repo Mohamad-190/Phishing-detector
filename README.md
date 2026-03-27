@@ -1,31 +1,33 @@
 # Phishing Detector
 
-Ein Machine-Learning-basierter Phishing-Detektor, der dein Gmail-Postfach in Echtzeit überwacht und verdächtige E-Mails identifiziert.
+Ein Machine-Learning-basierter Phishing-Detektor, der dein Gmail-Postfach überwacht und verdächtige E-Mails anhand von Textanalyse und E-Mail-Header-Authentifizierung identifiziert.
 
 ## Überblick
 
-Dieses Projekt kombiniert einen trainierten Random-Forest-Klassifikator mit regelbasierten Heuristiken, um Phishing-Versuche zuverlässig zu erkennen. Das System analysiert eingehende E-Mails automatisch und warnt bei verdächtigen Nachrichten.
+Dieses Projekt kombiniert einen trainierten ML-Klassifikator mit E-Mail-Header-Authentifizierungschecks (SPF, DKIM, DMARC), um Phishing-Versuche zuverlässig zu erkennen. Das System analysiert eingehende E-Mails automatisch und warnt bei verdächtigen Nachrichten.
 
 ## Features
 
-- **ML-basierte Erkennung**: TF-IDF Vektorisierung mit Random Forest Classifier
-- **Multi-Source Training**: Trainiert auf kombinierten Datensätzen (Reddit, VZ, englische Phishing-Mails)
-- **Absender-Analyse**: Prüfung gegen Tranco Top 1M Domains
-- **Heuristik-Layer**: Zusätzliche Prüfungen für Reply-To Diskrepanzen und verdächtige URLs
-- **Echtzeit-Monitoring**: Automatische Prüfung alle 60 Sekunden
-- **Gmail Integration**: Direkte Anbindung über Google API
+- **ML-basierte Erkennung:** TF-IDF Vektorisierung mit Logistic Regression Classifier
+- **SPF-Check:** Überprüft ob der sendende Server autorisiert ist, Mails im Namen der Absender-Domain zu versenden
+- **DKIM-Check:** Verifiziert die kryptographische Signatur der E-Mail um Manipulation zu erkennen
+- **DMARC-Check:** Prüft ob die From-Domain mit den SPF/DKIM-Ergebnissen übereinstimmt (Spoofing-Erkennung)
+- **Score-System:** Header-Ergebnisse beeinflussen die Phishing-Wahrscheinlichkeit gewichtet
+- **Gmail Integration:** Direkte Anbindung über Google Gmail API
 
 ## Technologie-Stack
 
 | Komponente | Technologie |
-|------------|-------------|
+|---|---|
 | Sprache | Python 3 |
 | ML Framework | scikit-learn |
 | Text Processing | TF-IDF Vectorizer (n-grams) |
-| Klassifikator | Random Forest |
+| Klassifikator | Logistic Regression |
 | E-Mail API | Google Gmail API |
 | HTML Parsing | BeautifulSoup4 |
-| Domain Extraction | tldextract |
+| SPF-Prüfung | pyspf + dnspython |
+| DKIM-Prüfung | dkimpy |
+| DMARC-Prüfung | dnspython (eigene Implementierung) |
 
 ## Installation
 
@@ -39,7 +41,7 @@ cd Phising_detector
 ### 2. Abhängigkeiten installieren
 
 ```bash
-pip install pandas scikit-learn joblib beautifulsoup4 google-auth google-auth-oauthlib google-api-python-client tldextract
+pip install pandas scikit-learn joblib beautifulsoup4 google-auth google-auth-oauthlib google-api-python-client dnspython pyspf dkimpy
 ```
 
 ### 3. Gmail API einrichten
@@ -52,11 +54,9 @@ pip install pandas scikit-learn joblib beautifulsoup4 google-auth google-auth-oa
 
 ### 4. Daten vorbereiten
 
-Stelle sicher, dass folgende Dateien im `data/` Ordner vorhanden sind:
-- `phishing_emails.csv` – Englische Phishing-Mails mit Spalten `subject`, `body`, `label`
-- `reddit.json` – Reddit Phishing-Posts
-- `vz.json` – VZ Phishing-Daten
-- `top-1m.csv` – Tranco Top 1 Million Domains
+Stelle sicher, dass folgende Datei im `data/` Ordner vorhanden ist:
+
+- `phishing_emails.csv` – E-Mail-Datensatz mit Spalten `subject`, `body`, `label`
 
 ## Verwendung
 
@@ -67,6 +67,7 @@ python train.py
 ```
 
 Ausgabe:
+
 ```
 Lade Daten...
 → X E-Mails geladen
@@ -85,7 +86,7 @@ Das trainierte Modell wird unter `./models/phishing_model.pkl` gespeichert.
 python main.py
 ```
 
-Bei erstmaligem Start öffnet sich ein Browser-Fenster zur Gmail-Authentifizierung. Danach prüft das System automatisch alle 60 Sekunden deine letzten 30 E-Mails. (Kann man natürlich erhöhen oder verkleinern)
+Bei erstmaligem Start öffnet sich ein Browser-Fenster zur Gmail-Authentifizierung. Danach prüft das System deine letzten E-Mails und gibt eine Bewertung für jede Mail aus.
 
 ## Funktionsweise
 
@@ -94,52 +95,63 @@ Bei erstmaligem Start öffnet sich ein Browser-Fenster zur Gmail-Authentifizieru
 ```
 E-Mail eingehend
        ↓
-┌──────────────────────┐
-│  Text extrahieren    │  (Betreff + Absender + Body)
-└──────────────────────┘
+┌──────────────────────────┐
+│  Text extrahieren        │  (Betreff + Absender + Body)
+└──────────────────────────┘
        ↓
-┌──────────────────────┐
-│  ML-Modell Prediction│  (TF-IDF → Random Forest)
-└──────────────────────┘
+┌──────────────────────────┐
+│  ML-Modell Prediction    │  (TF-IDF → Logistic Regression)
+└──────────────────────────┘
        ↓
-┌──────────────────────┐
-│  Heuristik-Anpassung │
-│  • Absender-Domain   │  (+20% wenn verdächtig)
-│  • Reply-To Check    │  (+30% wenn abweichend)
-│  • URL-Prüfung       │  (+10-30% bei unbekannten Domains)
-└──────────────────────┘
+┌──────────────────────────┐
+│  Header-Authentifizierung│
+│  • SPF-Check             │  (+30% bei fail)
+│  • DKIM-Check            │  (+25% bei fail)
+│  • DMARC-Check           │  (+35% bei fail)
+└──────────────────────────┘
        ↓
-┌──────────────────────┐
-│  Finale Bewertung    │  (≥70% → Phishing-Warnung)
-└──────────────────────┘
+┌──────────────────────────┐
+│  Finale Bewertung        │  (≥50% → Phishing-Warnung)
+└──────────────────────────┘
 ```
 
-### Absender-Klassifizierung
+### Score-Anpassungen
 
-| Status | Beschreibung |
-|--------|-------------|
-| `vertrauenswürdig` | Domain in Tranco Top 1M |
-| `freemailer` | Gmail, Outlook, Yahoo, etc. (neutral) |
-| `verdächtig` | Unbekannte Domain |
+| Check | Ergebnis | Anpassung |
+|---|---|---|
+| SPF | fail | +30% |
+| SPF | softfail | +15% |
+| SPF | none/neutral | +10% |
+| SPF | pass | ±0% |
+| DKIM | fail | +25% |
+| DKIM | error | +10% |
+| DKIM | pass | ±0% |
+| DMARC | fail | +35% |
+| DMARC | pass | ±0% |
+| Alle drei | pass | -15% |
+
+Negative Signale erhöhen die Phishing-Wahrscheinlichkeit. Ein einzelner Pass gilt nicht als Freispruch – nur wenn alle drei Checks bestehen, wird die Wahrscheinlichkeit leicht gesenkt.
 
 ## Projektstruktur
 
 ```
-Phising_detector/
-├── main.py              # Hauptanwendung (Gmail-Monitoring)
-├── train.py             # Modell-Training
+Phishing_detector/
+├── main.py                  # Hauptanwendung (Gmail-Monitoring)
+├── train.py                 # Modell-Training
+├── headerchecks/
+│   ├── __init__.py          # Package-Importe
+│   ├── spf_check.py         # SPF-Authentifizierung
+│   ├── dkim_check.py        # DKIM-Signaturprüfung
+│   └── dmarc_check.py       # DMARC-Alignment-Check
 ├── data/
-│   ├── phishing_emails.csv
-│   ├── reddit.json
-│   ├── vz.json
-│   └── top-1m.csv       # Tranco Domain-Liste
+│   └── phishing_emails.csv  # Trainingsdaten
 ├── models/
-│   └── phishing_model.pkl
-├── credentials.json     # Google OAuth (nicht committen!)
-├── token.json           # Auth Token (nicht committen!)
+│   └── phishing_model.pkl   # Trainiertes Modell
+├── credentials.json         # Google OAuth (nicht committen!)
+├── token.json               # Auth Token (nicht committen!)
 └── README.md
 ```
 
 ## Sicherheitshinweise
 
-⚠️ **Wichtig**: Füge `credentials.json` und `token.json` zu deiner `.gitignore` hinzu, um sensible Daten nicht zu veröffentlichen.
+> ⚠️ **Wichtig:** `credentials.json` und `token.json` müssen in der `.gitignore` stehen, um sensible Daten nicht zu veröffentlichen.
